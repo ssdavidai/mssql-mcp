@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MSSQL MCP HTTP Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+        }
+        .section {
+            margin-bottom: 30px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        textarea {
+            min-height: 100px;
+            font-family: monospace;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .output {
+            background-color: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .stream-event {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid #4CAF50;
+            background-color: #f0f0f0;
+        }
+        .error {
+            color: red;
+            border-left-color: red;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            background-color: #e8f4f8;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MSSQL MCP HTTP Client</h1>
+        
+        <div class="section">
+            <h2>Server Configuration</h2>
+            <div class="form-group">
+                <label for="serverUrl">Server URL:</label>
+                <input type="text" id="serverUrl" value="http://localhost:3000" />
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>Available Tools</h2>
+            <button onclick="loadTools()">Load Tools</button>
+            <div id="toolsList" class="output"></div>
+        </div>
+
+        <div class="section">
+            <h2>Execute Tool</h2>
+            <div class="form-group">
+                <label for="toolSelect">Select Tool:</label>
+                <select id="toolSelect">
+                    <option value="">-- Select a tool --</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="toolArgs">Tool Arguments (JSON):</label>
+                <textarea id="toolArgs" placeholder='{"tableName": "users"}'></textarea>
+            </div>
+            
+            <div class="form-group">
+                <label for="responseType">Response Type:</label>
+                <select id="responseType">
+                    <option value="json">JSON (Standard)</option>
+                    <option value="stream">SSE (Streaming)</option>
+                </select>
+            </div>
+            
+            <button onclick="executeTool()" id="executeBtn">Execute Tool</button>
+            <button onclick="stopStream()" id="stopBtn" style="display: none;">Stop Stream</button>
+        </div>
+
+        <div class="section">
+            <h2>Output</h2>
+            <div id="status" class="status"></div>
+            <div id="output" class="output"></div>
+        </div>
+    </div>
+
+    <script>
+        let eventSource = null;
+        let availableTools = [];
+
+        async function loadTools() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const output = document.getElementById('toolsList');
+            
+            try {
+                const response = await fetch(`${serverUrl}/tools`);
+                const data = await response.json();
+                
+                availableTools = data.tools;
+                
+                // Update tools dropdown
+                const toolSelect = document.getElementById('toolSelect');
+                toolSelect.innerHTML = '<option value="">-- Select a tool --</option>';
+                
+                data.tools.forEach(tool => {
+                    const option = document.createElement('option');
+                    option.value = tool.name;
+                    option.textContent = `${tool.name} - ${tool.description}`;
+                    toolSelect.appendChild(option);
+                });
+                
+                // Display tools info
+                output.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                
+                updateStatus('Tools loaded successfully', 'success');
+            } catch (error) {
+                output.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                updateStatus('Failed to load tools', 'error');
+            }
+        }
+
+        function updateStatus(message, type = 'info') {
+            const status = document.getElementById('status');
+            status.textContent = message;
+            status.style.backgroundColor = type === 'error' ? '#ffe8e8' : 
+                                         type === 'success' ? '#e8f8e8' : '#e8f4f8';
+        }
+
+        function stopStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                document.getElementById('executeBtn').disabled = false;
+                document.getElementById('stopBtn').style.display = 'none';
+                updateStatus('Stream stopped', 'info');
+            }
+        }
+
+        async function executeTool() {
+            const serverUrl = document.getElementById('serverUrl').value;
+            const toolName = document.getElementById('toolSelect').value;
+            const toolArgs = document.getElementById('toolArgs').value;
+            const responseType = document.getElementById('responseType').value;
+            const output = document.getElementById('output');
+            
+            if (!toolName) {
+                updateStatus('Please select a tool', 'error');
+                return;
+            }
+            
+            output.innerHTML = '';
+            
+            try {
+                const args = toolArgs ? JSON.parse(toolArgs) : {};
+                
+                if (responseType === 'stream') {
+                    // SSE streaming
+                    document.getElementById('executeBtn').disabled = true;
+                    document.getElementById('stopBtn').style.display = 'inline-block';
+                    updateStatus('Connecting to stream...', 'info');
+                    
+                    eventSource = new EventSource(`${serverUrl}/tools/${toolName}/stream`, {
+                        method: 'POST'
+                    });
+                    
+                    // Create a form data or use fetch for POST with SSE
+                    const response = await fetch(`${serverUrl}/tools/${toolName}/stream`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(args)
+                    });
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+                        
+                        for (const line of lines) {
+                            if (line.startsWith('event:')) {
+                                const event = line.substring(6).trim();
+                                const dataLine = lines[lines.indexOf(line) + 1];
+                                if (dataLine && dataLine.startsWith('data:')) {
+                                    const data = JSON.parse(dataLine.substring(5).trim());
+                                    handleStreamEvent(event, data);
+                                }
+                            }
+                        }
+                    }
+                    
+                    document.getElementById('executeBtn').disabled = false;
+                    document.getElementById('stopBtn').style.display = 'none';
+                    
+                } else {
+                    // Standard JSON response
+                    updateStatus('Executing tool...', 'info');
+                    
+                    const response = await fetch(`${serverUrl}/tools/${toolName}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify(args)
+                    });
+                    
+                    const data = await response.json();
+                    output.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+                    
+                    updateStatus('Tool executed successfully', 'success');
+                }
+                
+            } catch (error) {
+                output.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                updateStatus('Execution failed', 'error');
+                stopStream();
+            }
+        }
+
+        function handleStreamEvent(event, data) {
+            const output = document.getElementById('output');
+            const eventDiv = document.createElement('div');
+            eventDiv.className = 'stream-event';
+            
+            switch (event) {
+                case 'connected':
+                    eventDiv.innerHTML = `<strong>Connected:</strong> ${data.message}`;
+                    updateStatus('Connected to stream', 'success');
+                    break;
+                case 'processing':
+                    eventDiv.innerHTML = `<strong>Processing:</strong> ${data.toolName} with args: ${JSON.stringify(data.args)}`;
+                    updateStatus('Processing request...', 'info');
+                    break;
+                case 'result-count':
+                    eventDiv.innerHTML = `<strong>Result Count:</strong> ${data.count} items`;
+                    break;
+                case 'result-item':
+                    eventDiv.innerHTML = `<strong>Item ${data.index + 1}/${data.total}:</strong> <pre>${JSON.stringify(data.item, null, 2)}</pre>`;
+                    break;
+                case 'result':
+                    eventDiv.innerHTML = `<strong>Result:</strong> <pre>${JSON.stringify(data, null, 2)}</pre>`;
+                    break;
+                case 'complete':
+                    eventDiv.innerHTML = `<strong>Complete:</strong> Success: ${data.success}`;
+                    eventDiv.style.borderLeftColor = data.success ? '#4CAF50' : '#ff5252';
+                    updateStatus('Stream completed', data.success ? 'success' : 'error');
+                    break;
+                case 'error':
+                    eventDiv.className += ' error';
+                    eventDiv.innerHTML = `<strong>Error:</strong> ${data.error}`;
+                    updateStatus('Stream error', 'error');
+                    break;
+                default:
+                    eventDiv.innerHTML = `<strong>${event}:</strong> ${JSON.stringify(data)}`;
+            }
+            
+            output.appendChild(eventDiv);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Load tools on page load
+        window.onload = () => {
+            loadTools();
+        };
+    </script>
+</body>
+</html>
