@@ -1,0 +1,54 @@
+# Smithery configuration file: https://smithery.ai/docs/build/project-config
+
+startCommand:
+  type: stdio
+  commandFunction:
+    # A JS function that produces the CLI command based on the given config to start the MCP on stdio.
+    |-
+    (config) => ({
+      command: 'node',
+      args: ['dist/index.js'],
+      env: {
+        SERVER_NAME: config.serverName,
+        DATABASE_NAME: config.databaseName,
+        SQL_USERNAME: config.sqlUsername,
+        SQL_PASSWORD: config.sqlPassword,
+        TRUST_SERVER_CERTIFICATE: String(config.trustServerCertificate),
+        CONNECTION_TIMEOUT: String(config.connectionTimeout),
+        READONLY: String(config.readOnly),
+      },
+    })
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - serverName
+      - databaseName
+      - sqlUsername
+      - sqlPassword
+    properties:
+      serverName:
+        type: string
+      databaseName:
+        type: string
+      sqlUsername:
+        type: string
+      sqlPassword:
+        type: string
+      trustServerCertificate:
+        type: boolean
+        default: false
+      connectionTimeout:
+        type: number
+        default: 30
+      readOnly:
+        type: boolean
+        default: false
+  exampleConfig:
+    serverName: my-server.database.windows.net
+    databaseName: SampleDB
+    sqlUsername: adminUser
+    sqlPassword: P@ssw0rd!
+    trustServerCertificate: false
+    connectionTimeout: 30
+    readOnly: false
